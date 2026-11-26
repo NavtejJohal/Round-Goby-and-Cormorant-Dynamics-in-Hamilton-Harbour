@@ -1,14 +1,18 @@
-# Functions for power analysis
+## Functions for power analysis
+# 
 
+# get data
 get_goby_data <- function(goby_file){
   read_csv(goby_file)
 }
 
+#get data
 get_cormorant_data <- function(cormorant_file){
   cormorantData <- read_csv(cormorant_file) |> 
     fix_column_names()
 }
 
+#merge datasets
 combine_data <- function(goby_data, cormorant_data) {
   summed_Goby_Data <- goby_data |> 
     group_by(Year, Site) |> 
@@ -25,18 +29,21 @@ combine_data <- function(goby_data, cormorant_data) {
     left_join(cormorant_data, by = "Year")
 }
 
+#Extract sites as list for ease of use
 get_sites <- function(comb_data){
   comb_data$Site <- factor(comb_data$Site)
   sites <- levels(comb_data$Site)
   return(sites)
 }
 
+#extracting 2002-2022 nest data for easier simulation (comb data as repeat values)
 fix_nest_data <- function(comb_data) {
   comb_data |>
     distinct(Year, Active_Nests) |>
     arrange(Year)
 }
 
+#model cormorant trend to get sd of residuals to simulate more years of active nest counts
 model_cormorant_trend <- function(nest_data){
 # Estimate trend in nest count
   nest_trend <- lm(
@@ -51,6 +58,7 @@ model_cormorant_trend <- function(nest_data){
   )
 }
 
+# Simulate future nest counts
 make_annual_cormorant_data <- function(n_years, nest_mean, sd, nest_data) { #(number of total years, constant mean, sd around that mean)
   
   observed_years <- nrow(nest_data) # of already observed years
@@ -79,7 +87,7 @@ make_annual_cormorant_data <- function(n_years, nest_mean, sd, nest_data) { #(nu
     )
     
     annual_extended <- bind_rows(nest_data, future_data)
-    
+    #When passed through with 21 years it passes the current dataset
   } else {
     
     annual_extended <- nest_data
@@ -95,6 +103,7 @@ make_annual_cormorant_data <- function(n_years, nest_mean, sd, nest_data) { #(nu
     )
 }
 
+# creates a formated dataframe for storing simulation information
 make_output_design <- function(n_years, cormorantData, sites) {
   
   annual_subset <- cormorantData |> # adjusts cormorant data to the number of years of goby data needed
@@ -125,6 +134,7 @@ create_four_designs <- function(proposedAvgNests = 4000, cormorant_residual_sd, 
   )
 }
 
+#simulate and fit
 run_simulation <- function(
     design,
     sim_formula = ~
@@ -146,7 +156,7 @@ run_simulation <- function(
   params <- list(
     beta = c(
       0, #intercept
-      beta_true,
+      beta_true, # active nests
       beta_year
     ),
     betadisp = 2 * log(residual_sd),
@@ -237,7 +247,7 @@ run_simulation <- function(
 run_power_analysis <- function(
     designs,
     beta_cormorant = c(0,-0.1,-0.2,-0.3), #list of beta values
-    beta_year,
+    beta_year, #all the rest are preset in the simulate function
     residual_sd,
     ryear_sd,
     rsite_sd,
@@ -248,7 +258,7 @@ run_power_analysis <- function(
   all_replicates <- list()
   all_summaries <- list()
   
-  #counter for changing seed (gives same result each power analysis can remove)
+  #counter for saving simulations in list
   counter <- 1
   
   for (design_name in names(designs)) {
@@ -263,7 +273,7 @@ run_power_analysis <- function(
       output <- run_simulation(
         design = current_design,
         beta_true = current_beta,
-        nsim = 10, # number of simulations
+        nsim = nsim, # number of simulations per loop
         seed = 1000 + counter
       )
       

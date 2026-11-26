@@ -14,7 +14,7 @@ tar_option_set(
 # Run the R scripts in the R/ folder with your custom functions:
 tar_source()
 
-# Replace the target list below with your own:
+# Power analysis for goby~cormorant + year + (1|year) + (1|site):
 list(
   tar_target(goby_data, get_goby_data("Data/CPUE_BaitedOnly.csv")), #get data
   tar_target(cormorant_data, get_cormorant_data("Data/CormorantHWRaw.csv")),#get data
