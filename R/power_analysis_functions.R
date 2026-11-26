@@ -1,4 +1,4 @@
-# Functions
+# Functions for power analysis
 
 get_goby_data <- function(goby_file){
   read_csv(goby_file)
