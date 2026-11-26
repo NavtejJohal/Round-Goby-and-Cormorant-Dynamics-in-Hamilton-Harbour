@@ -190,27 +190,62 @@ library(broom.mixed)
 library(purrr)
 library(patchwork)
 library(performance)
-# Extract one observation per year for predator abundance
-nests <- nests |>
-  mutate(
-    Active_Nests_z = (Active_Nests - nest_stats$nest_mean) /
-      nest_stats$nest_sd
-  )
 
-# nest statistics
-nest_mean <- mean(nests$Active_Nests, na.rm = TRUE)
-nest_sd <- sd(nests$Active_Nests, na.rm = TRUE)
+## Need to create a simulation for future active nest counts
+## Since the Cormorants are managed in the harbour decided make the future trend
+## fluctuate around a constant mean for simplicity
 
-# Year statistics
-#year_mean <- mean(nests$Year, na.rm = TRUE)
-year_mean <- 4800
-year_sd <- sd(nests$Year, na.rm = TRUE)
-
-# make year a dbl
+# ensure year is continuous
 nests <- nests |>
   mutate(
     Year = as.numeric(Year)
   )
+
+## Function to generate extra cormorant data
+make_annual_data <- function(n_years, nest_mean, sd) { #(number of total years, constant mean, sd around that mean)
+  
+  observed_years <- nrow(nests) # of already observed years
+  
+  additional_years <- n_years - observed_years # amount of extra years to generate
+  
+  # If statement to avoid requests of less years
+  if (additional_years < 0) { 
+    stop("Requested years cannot be fewer than observed years.") # Stops the function
+  }
+  
+  if (additional_years > 0) {
+    #create dataset to store additional years
+    future_data <- tibble( 
+      Year = max(nests$Year) + seq_len(additional_years),
+      Active_Nests = round( # round so there are not decimal nest counts
+        pmax(
+          0,
+          rnorm(
+            additional_years,
+            mean = nest_mean,
+            sd = sd
+          )
+        )
+      )
+    )
+    
+    annual_extended <- bind_rows(nests, future_data)
+
+  } else {
+    
+    annual_extended <- nests
+  }
+  
+  annual_extended |>
+    mutate(
+      Active_Nests_z =
+        (Active_Nests - mean(Active_Nests)) / sd(Active_Nests),
+      Year_z =
+        (Year - mean(Year)) / sd(Year),
+      Year_f = factor(Year)
+    )
+}
+
 
 # Estimate trend in nest count
 nest_trend <- lm(
@@ -224,65 +259,13 @@ stable_sd <- sd(
   na.rm = TRUE
 )
 
-# Generate one 40-year annual cormorant dataset
-make_annual_data <- function(n_years) {
-  
-  observed_years <- nrow(nests)
-  
-  additional_years <- n_years - observed_years
-  
-  if (additional_years < 0) {
-    stop("Requested years cannot be fewer than observed years.")
-  }
-  
-  if (additional_years > 0) {
-    
-    future_data <- tibble(
-      Year = max(nests$Year) +
-        seq_len(additional_years),
-      
-      Active_Nests = round(
-        pmax(
-          0,
-          rnorm(
-            additional_years,
-            mean = nest_mean,
-            sd = stable_sd
-          )
-        )
-      )
-    )
-    
-    annual_extended <- bind_rows(
-      nests |>
-        select(Year, Active_Nests),
-      
-      future_data
-    )
-    
-  } else {
-    
-    annual_extended <- nests|>
-      select(Year, Active_Nests)
-  }
-  
-  annual_extended|>
-    mutate(
-      Active_Nests_z =
-        (Active_Nests - nest_mean) / nest_sd,
-      
-      Year_z =
-        (Year - year_mean) / year_sd,
-      
-      Year_f = factor(Year)
-    )
-}
-
 # Generate the 40-year dataset once
-annual_40_full <- make_annual_data(40)
+proposedAvgNests <- 4000
+cormorantSim <- make_annual_data(40, proposedAvgNests, stable_sd)
+
 #plot it
 ggplot(
-  annual_40_full,
+  cormorantSim,
   aes(x = Year, y = Active_Nests)
 ) +
   geom_line() +
@@ -292,30 +275,30 @@ ggplot(
     linetype = "dashed"
   ) +
   labs(
-    title = "Observed and simulated predator abundance",
+    title = "Observed and simulated cormorant abundance",
     x = "Year",
-    y = "Active predator nests"
+    y = "Active cormorant nests"
   ) +
   theme_bw() +
-  scale_y_continuous(expand = c(0, 0), limits = c(0, 5000))
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 6000))
 
 # Extract the six sites
 sites <- levels(combData$Site)
 
-# Function to create site-year datasets
-make_design <- function(n_years) {
+# Function to create site-year goby dataset
+make_design <- function(n_years, cormorantData, sites) {
   
-  annual_subset <- annual_40_full %>%
+  annual_subset <- cormorantData |> # adjusts cormorant data to the number of years of goby data needed
     slice_head(n = n_years)
-  
+
   crossing(
     Year = annual_subset$Year,
     Site = sites
-  ) %>%
+  ) |>
     left_join(
       annual_subset,
       by = "Year"
-    ) %>%
+    ) |>
     mutate(
       Site = factor(Site, levels = sites),
       Year_f = factor(Year),
@@ -323,12 +306,12 @@ make_design <- function(n_years) {
     )
 }
 
-# Create all four sample sizes
+# Create datasets for all 4 year amounts
 designs <- list(
-  "20 years" = make_design(20),
-  "25 years" = make_design(25),
-  "30 years" = make_design(30),
-  "40 years" = make_design(40)
+  "21 years" = make_design(20, make_annual_data(21,proposedAvgNests,stable_sd), sites),
+  "25 years" = make_design(25, make_annual_data(25,proposedAvgNests,stable_sd), sites),
+  "30 years" = make_design(30, make_annual_data(30,proposedAvgNests,stable_sd), sites),
+  "40 years" = make_design(40, make_annual_data(40,proposedAvgNests,stable_sd), sites)
 )
 
 # Check sample sizes
@@ -345,9 +328,8 @@ sim_formula <- ~
 
 # parameters
 ## active nest fixed effect
-beta_scenarios <- tibble(
-  beta_true = c(0, -0.10, -0.20, -0.30)
-)
+beta_cormorant <- c(0, -0.10, -0.20, -0.30)
+
 ## Fixed effect for year
 beta_year <- -0.4
 
@@ -355,30 +337,31 @@ beta_year <- -0.4
 residual_sd <- 0.70
 
 # Random effect SDs
-year_sd <- 0.40
-site_sd <- 0.50
+ryear_sd <- 0.40
+rsite_sd <- 0.50
 
 run_simulation <- function(
     design,
     beta_true,
+    beta_year,
+    residual_sd,
+    ryear_sd,
+    rsite_sd,
     nsim = 10,
     seed = 123
 ) {
   
   # Define parameters
   params <- list(
-    
     beta = c(
-      0,
+      0, #intercept
       beta_true,
       beta_year
     ),
-    
     betadisp = 2 * log(residual_sd),
-    
     theta = c(
-      log(year_sd),
-      log(site_sd)
+      log(ryear_sd),
+      log(rsite_sd)
     )
   )
   
@@ -392,45 +375,23 @@ run_simulation <- function(
     seed = seed
   )
   
-  # Fit the model to each simulated dataset
+  ## Fit the model to each simulated dataset
+  # Save the results of each simulation
   results <- map_dfr(seq_len(nsim), function(i) {
     
     sim_data <- design
-    
+  
     sim_data$Fish_Abundance_z <-
       simulated_values[[i]]
-    
-    fit <- tryCatch(
-      suppressWarnings(
+
+    fit <-
         glmmTMB(
           model_formula,
           family = gaussian,
           data = sim_data
         )
-      ),
-      error = function(e) NULL
-    )
     
-    # Handle failed model fits
-    if (is.null(fit)) {
-      
-      return(tibble(
-        replicate = i,
-        estimate = NA_real_,
-        std.error = NA_real_,
-        conf.low = NA_real_,
-        conf.high = NA_real_,
-        converged = FALSE
-      ))
-    }
-    
-    converged <- (
-      fit$fit$convergence == 0 &&
-        isTRUE(fit$sdr$pdHess)
-    )
-    
-    # Extract fixed effects and Wald confidence intervals
-    tidy_fit <- tryCatch(
+    tidy_fit <-
       broom.mixed::tidy(
         fit,
         effects = "fixed",
@@ -438,63 +399,23 @@ run_simulation <- function(
         conf.int = TRUE,
         conf.level = 0.95,
         conf.method = "wald"
-      ),
-      error = function(e) NULL
-    )
-    
-    if (is.null(tidy_fit)) {
-      
-      return(tibble(
-        replicate = i,
-        estimate = NA_real_,
-        std.error = NA_real_,
-        conf.low = NA_real_,
-        conf.high = NA_real_,
-        converged = FALSE
-      ))
-    }
-    
-    predator_result <- tidy_fit %>%
+      )
+    # Save the effect of cormorants on nests
+    cormorant_result <- tidy_fit |>
       filter(term == "Active_Nests_z")
-    
-    if (nrow(predator_result) == 0) {
-      
-      return(tibble(
-        replicate = i,
-        estimate = NA_real_,
-        std.error = NA_real_,
-        conf.low = NA_real_,
-        conf.high = NA_real_,
-        converged = FALSE
-      ))
-    }
     
     tibble(
       replicate = i,
-      estimate = predator_result$estimate[1],
-      std.error = predator_result$std.error[1],
-      conf.low = predator_result$conf.low[1],
-      conf.high = predator_result$conf.high[1],
-      converged = converged
+      estimate = cormorant_result$estimate[1],
+      std.error = cormorant_result$std.error[1],
+      conf.low = cormorant_result$conf.low[1],
+      conf.high = cormorant_result$conf.high[1],
     )
   })
   
-  # Keep successful model fits
-  successful <- results %>%
-    filter(
-      converged,
-      is.finite(estimate),
-      is.finite(conf.low),
-      is.finite(conf.high)
-    )
-  
-  # Calculate performance measures
-  summary_results <- successful %>%
+  # Calculate analysis measures: estimate mean, bias, RMSE, CI width, power
+  summary_results <- results |>
     summarise(
-      
-      n_successful = n(),
-      
-      convergence_rate = n_successful / nsim,
       
       mean_estimate = mean(estimate),
       
@@ -513,13 +434,7 @@ run_simulation <- function(
           conf.high >= beta_true
       ),
       
-      power = if (beta_true < 0) {
-        mean(conf.high < 0)
-      } else if (beta_true > 0) {
-        mean(conf.low > 0)
-      } else {
-        NA_real_
-      }
+      power = mean(conf.high < 0)
     )
   
   list(
@@ -528,42 +443,49 @@ run_simulation <- function(
   )
 }
 
+## prepping running loop of simulations
+# Creating result lists
 all_replicates <- list()
 all_summaries <- list()
 
+#counter for changing seed (gives same result each power analysis can remove)
 counter <- 1
 
 for (design_name in names(designs)) {
   
   current_design <- designs[[design_name]]
   
-  for (j in seq_len(nrow(beta_scenarios))) {
+  for (j in 1:length(beta_cormorant)) {
     
-    current_beta <- beta_scenarios$beta_true[j]
+    current_beta <- beta_cormorant[j]
     
-    # Run simulations
+    # Run simulations and model fits
     output <- run_simulation(
       design = current_design,
       beta_true = current_beta,
-      nsim = 1000, # number of simmulations
+      beta_year = beta_year,
+      residual_sd = residual_sd,
+      ryear_sd = ryear_sd,
+      rsite_sd = rsite_sd,
+      nsim = 10, # number of simulations
       seed = 1000 + counter
     )
     
     # Save individual simulation results
     all_replicates[[counter]] <-
-      output$replicates %>%
+      output$replicates |>
       mutate(
         sample_size = design_name,
-        n_years = n_distinct(current_design$Year),
+        n_years = length(unique(current_design$Year)),
         beta_true = current_beta
       )
     
     # Save summary statistics
     all_summaries[[counter]] <-
-      output$summary %>%
+      output$summary |>
       mutate(
         sample_size = design_name,
-        n_years = n_distinct(current_design$Year),
+        n_years = length(unique(current_design$Year)),
         beta_true = current_beta
       )
     
@@ -577,12 +499,10 @@ replicate_results <- bind_rows(all_replicates)
 power_summary <- bind_rows(all_summaries)
 
 #check summary
-power_summary %>%
+power_summary |>
   select(
     sample_size,
     beta_true,
-    n_successful,
-    convergence_rate,
     mean_estimate,
     bias,
     RMSE,
@@ -591,7 +511,7 @@ power_summary %>%
     power
   )
 
-plot_data <- power_summary %>%
+plot_data <- power_summary |>
   mutate(
     beta_group = factor(
       beta_true,
@@ -604,6 +524,9 @@ plot_data <- power_summary %>%
       )
     )
   )
+###########
+## Plots ##
+###########
 p_beta <- ggplot(
   plot_data,
   aes(
@@ -707,12 +630,12 @@ p_power <- ggplot(
 p_power
 
 p_bias <- ggplot(
-  power_summary,
+  plot_data,
   aes(
     x = n_years,
     y = bias,
-    colour = factor(beta_true),
-    group = beta_true
+    colour = beta_group,
+    group = beta_group
   )
 ) +
   geom_line(linewidth = 1) +
@@ -732,12 +655,12 @@ p_bias <- ggplot(
 p_bias
 
 p_rmse <- ggplot(
-  power_summary,
+  plot_data,
   aes(
     x = n_years,
     y = RMSE,
-    colour = factor(beta_true),
-    group = beta_true
+    colour = beta_group,
+    group = beta_group
   )
 ) +
   geom_line(linewidth = 1) +
@@ -751,32 +674,33 @@ p_rmse <- ggplot(
   theme_classic()
 
 p_rmse
-# Save individual simulation results
-write.csv(
-  replicate_results,
-  "replicate_results.csv",
-  row.names = FALSE
-)
+
+## Save individual simulation results
+#write.csv(
+#  replicate_results,
+#  "replicate_results.csv",
+#  row.names = FALSE
+#)
 
 # Save summary statistics
-write.csv(
-  power_summary,
-  "power_summary.csv",
-  row.names = FALSE
-)
+#write.csv(
+#  power_summary,
+#  "power_summary.csv",
+#  row.names = FALSE
+#)
 
 # Save R objects
-saveRDS(
-  list(
-    replicate_results = replicate_results,
-    power_summary = power_summary
-  ),
-  "power_analysis_results.rds"
-)
+#saveRDS(
+#  list(
+#    replicate_results = replicate_results,
+#    power_summary = power_summary
+#  ),
+#  "power_analysis_results.rds"
+#)
 #save plots
-ggsave("beta_plot.png",p_beta)
-ggsave("CI_width_plot.png",p_width)
-ggsave("coverage_plot.png",p_coverage)
-ggsave("power_plot.png",p_power)
-ggsave("bias_plot.png",p_bias)
-ggsave("rmse_plot.png",p_rmse)
+#ggsave("beta_plot.png",p_beta)
+#ggsave("CI_width_plot.png",p_width)
+#ggsave("coverage_plot.png",p_coverage)
+#ggsave("power_plot.png",p_power)
+#ggsave("bias_plot.png",p_bias)
+#ggsave("rmse_plot.png",p_rmse)
